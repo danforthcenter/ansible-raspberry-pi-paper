@@ -1,0 +1,278 @@
+---
+title: "HL ProbeTemps Full Data"
+author: "JG Ballenger"
+date: "2023-09-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(gt) #grammar for tables
+library(Rmisc)
+library(drc)
+library(emmeans)
+library(cowplot)
+library(lmerTest)
+library(multcomp)
+library(multcompView)
+library(lme4)
+library(ggpubr)
+library(tidyverse)
+library(rstatix)
+library(lubridate)
+library(nlme)
+library(ggthemes)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+
+B501_R1.lights.dat<-read.csv("B501_R1_temps_Jul2023.csv")
+temps.dat<-B501_R1.lights.dat
+
+temps.dat<-temps.dat%>%
+  filter(temperature.probe !="devices")%>%
+  filter(temperature.usb !="Error:")%>%
+  filter(temperature.probe!="-")%>%
+  filter(temperature.usb!="-")%>%
+  filter(temperature.probe !="Error:")%>%
+  filter(temperature.usb !="devices")
+
+temps.dat.hour<-unlist(lapply(str_split(temps.dat$datetime,"-"), FUN = function(l){return(l[4])}))
+temps.dat$lights<-temps.dat.hour
+
+temps.dat$datetime<-as.POSIXct(temps.dat$datetime, format = "%Y-%m-%d-%H-%M")
+
+temps.dat$temperature.probe<-as.numeric(temps.dat$temperature.probe)
+
+temps.dat<-temps.dat%>%
+  mutate(lights = case_match(
+    lights,
+    c("00", "01", "02","03","04","05","06","07","08","21","22","23") ~ "off",
+    c("09", "10", "11","12","13","14","15","16","17","18","19","20") ~ "on"))
+
+temps.dat$correction_factor<-temps.dat$ip
+
+temps.dat<-temps.dat%>%
+  mutate(correction_factor = case_match(
+    correction_factor,
+    c("10.9.1.88") ~ "1.73",
+    c("10.9.1.89") ~ "1.76",
+    c("10.9.1.90") ~ "1.50",
+    c("10.9.1.91") ~ "1.85",
+    c("10.9.1.92") ~ "1",
+    c("10.9.1.93") ~ "2.98",
+    c("10.9.1.94") ~ "1.72",
+    c("10.9.1.95") ~ "0.44",
+    c("10.9.1.96") ~ "1.31",
+    c("10.9.1.97") ~ "2.49",
+    c("10.9.1.98") ~ "2.40",
+    c("10.9.1.99") ~ "1.55"))
+
+colors <- c("159.001.001" = "black", "159.001.002"="yellow","159.001.003"="grey","159.001.004" = "blue",
+            "159.002.001" = "orange", "159.002.002" = "green", "159.002.003"="purple", "159.002.004"= "pink",
+            "159.003.001" = "red", "159.003.002" = "brown", "159.003.003"="cyan", "150.003.004" = "magenta")
+
+temps.dat$correction_factor<-as.numeric(temps.dat$correction_factor)
+
+temps.dat$probe.corrected<-temps.dat$temperature.probe+temps.dat$correction_factor
+
+planting_date <- as.POSIXct("2023-07-17-00-59", format="%Y-%m-%d-%H-%M")
+
+temps.dat$days_after_start <- as.numeric(difftime(temps.dat$datetime, planting_date, units = "days"))
+
+head(temps.dat)
+
+
+
+```
+
+
+```{r}
+
+temps.mean<-summarySE(temps.dat,measurevar = "temperature.probe",
+                      groupvars = c("position"),
+                      na.rm = T)
+
+temps.mean<-summarySE(temps.dat,measurevar = "probe.corrected",
+                      groupvars = c("lights"),
+                      na.rm = T)
+
+
+temps.light.mean<-summarySE(temps.dat,measurevar = "temperature.probe",
+                      groupvars = c("position","lights"),
+                      na.rm = T)
+
+```
+
+```{r}
+
+#The purpose of this code snippet is to create plots demonstrating that there is a low variation in probe readings, during the light and during the dark cycles of the growth chamber.
+
+temps2.dat<-temps.dat%>%
+  filter(position %in% c("159.001.001","159.003.001"))
+
+str(temps2.dat)
+
+light_labels <- as_labeller(c("off" = "Lights Off", "on" = "Lights On"))
+probe_labels<-as_labeller(c("159.001.001"="Probe K","159.003.001"="Probe J"))
+temps2.dat$lights <- factor(temps2.dat$lights, levels = c("on", "off"))
+
+get_regression_eq <- function(df) {
+  model <- lm(probe.corrected ~ days_after_start, data = df)
+  intercept <- coef(model)[1]
+  slope <- coef(model)[2]
+  r_squared <- summary(model)$r.squared
+  # Round slope and intercept to 2 decimals, and display R² with 5 decimals
+  eq <- paste0("y = ", round(slope, 2), "x + ", round(intercept, 2), 
+               "\nR² = ", format(r_squared, digits = 5))
+  return(eq)
+}
+
+
+# Group by 'lights' and 'position' and calculate regression equation for each group
+temps2.dat <- temps2.dat %>%
+  group_by(lights, position) %>%
+  mutate(regression_eq = get_regression_eq(cur_data())) %>%
+  ungroup()
+
+#Set each regression equation to be distinct, instead of one copy for every data point.
+
+label_data<-temps2.dat%>%
+  group_by(lights,position)%>%
+  distinct(lights, position, regression_eq)
+
+# Create the plot with regression line, equation, and R² for each position
+Temps.plot <- ggplot(temps2.dat,                            
+       aes(x = days_after_start,
+           y = probe.corrected,
+           col = position)) +
+  ggtitle("Temperature over time") +
+  labs(y = "Degrees°C", x = "Timestamp") +
+  geom_point() +
+  scale_color_manual(values = colors) +
+  facet_wrap(~ lights * position, 
+             labeller = labeller(lights = light_labels, position = probe_labels)) +  
+  ylim(4, 10) +
+  geom_hline(yintercept = 6, color = "blue") +
+  geom_smooth(method = "lm", se = FALSE, color = "yellow") +  # Add regression line
+  theme_bw() +
+  # Add regression equations as annotations for each facet
+  geom_text(data=label_data, aes(x = 20, y = 5, label = regression_eq), 
+            color = "black", size = 4, hjust = 0)+
+  theme(legend.position = "none") 
+
+
+# Print the plot
+print(Temps.plot)
+
+ggsave("TempsB501-2positionswrapped5.pdf", Temps.plot,
+       width=20, height=8, units="in", dpi=600)
+
+
+```
+
+```{r}
+
+#The purpose of this code snippet is to analyze the variation in the growth chamber using corrected values from the probes.
+
+
+# Perform the Tukey HSD test and extract cld
+lighttest <- lm(probe.corrected ~ position * lights, data = temps.dat)
+ltaov <- aov(lighttest)
+summary(ltaov)
+
+probetest <- lm(probe.corrected ~ position * lights, data = temps.dat)
+probeav <- aov(probetest)
+summary(probeav)
+probe.tukey <- TukeyHSD(probeav)
+probe.tukey
+plot(probe.tukey)
+
+# Extract CLD values for the interaction between position and lights
+cld <- multcompLetters4(probeav, probe.tukey)
+print(cld)
+
+# Create a combined key of position and lights in both datasets
+temps.dat$pos_lights <- with(temps.dat, paste(position, lights, sep = ":"))
+
+# Add mean and standard deviation to the summary dataframe
+dt <- group_by(temps.dat, position, lights) %>%
+  summarise(m = mean(probe.corrected), sd = sd(probe.corrected)) %>%
+  arrange(desc(m))
+
+# Extract CLD letters for the interaction of position and lights
+cld <- as.data.frame.list(cld$`position:lights`)
+dt$cld <- cld$Letters
+
+# Print the updated dt
+print(dt)
+
+# Set the correct factor levels for 'lights'
+temps.dat$lights <- factor(temps.dat$lights, levels = c('on', 'off'))
+
+temps.dat$position <- factor(temps.dat$position, 
+                             levels = c("159.003.001", 
+                                        "159.003.002", 
+                                        "159.003.003", 
+                                        "159.003.004",
+                                        "159.002.001", 
+                                        "159.002.002", 
+                                        "159.002.003", 
+                                        "159.002.004",
+                                        "159.001.001", 
+                                        "159.001.002", 
+                                        "159.001.003", 
+                                        "159.001.004"))
+
+# Define custom labels
+custom_labels <- c("159.001.001" = "Bottom 1/Probe K",
+                   "159.001.002" = "Bottom 2/Probe A",
+                   "159.001.003" = "Bottom 3/Probe I",
+                   "159.001.004" = "Bottom 4/Probe G",
+                   "159.002.001" = "Middle 1/Probe D",
+                   "159.002.002" = "Middle 2/Probe H",
+                   "159.002.003" = "Middle 3/Probe L",
+                   "159.002.004" = "Middle 4/Probe F",
+                   "159.003.001" = "Top 1/Probe J",
+                   "159.003.002" = "Top 2/Probe B",
+                   "159.003.003" = "Top 3/Probe C",
+                   "159.003.004" = "Top 4/Probe E")
+
+# Plot the data using ggplot
+qq <- ggplot(temps.dat, aes(x = position, y = probe.corrected, fill = position)) +
+  geom_boxplot(outlier.shape = NA, show.legend = FALSE) +   # Remove legend from boxplot
+  geom_text(data = dt, aes(label = cld, x = position, y = m + sd), 
+            position = position_dodge2(0.75), vjust = -3) +
+  ylim(4, 10) +
+  labs(x = "Position", y = "Degrees°C") +
+  facet_grid(~lights, 
+             labeller = labeller(lights = light_labels)) +
+  geom_hline(yintercept = 6, color = "blue") +
+  
+  # Set custom axis and background settings
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1),
+        panel.background = element_rect(fill = "white", color = NA),
+        legend.position = "none",
+        strip.background = element_rect(fill = "grey80", color = "black"),   # grey background and black border
+        strip.text = element_text(color = "black"),
+        panel.border = element_rect(color = "black", fill = NA, size = 1)# Text color inside the box
+  ) +
+  
+  # Set custom X-axis labels
+  scale_x_discrete(labels = custom_labels)+
+  scale_fill_manual(values = colors)
+
+
+qq
+
+
+ggsave("6CB501Temps4.pdf", qq,
+       width=20, height=8, units="in", dpi=600)
+
+
+```

@@ -1,0 +1,74 @@
+---
+title: "Incubator Final Analysis"
+author: "Joe Ballenger"
+date: "4/6/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(gt) #grammar for tables
+library(Rmisc)
+library(drc)
+library(emmeans)
+library(cowplot)
+library(lmerTest)
+library(multcomp)
+library(multcompView)
+library(lme4)
+library(ggpubr)
+library(tidyverse)
+
+```
+
+```{R}
+#This code snippet describes temperature changes of soil surface temperature as the growth chamber door is left open
+
+Cal.dat <- read_excel("GC_Temps_March2023.xlsx", sheet = "Calibration", na="NA") %>%
+  mutate(Time = as.numeric(Time),
+         Soil =as.factor (Soil),
+         Tray = as.factor (Tray),
+         Temperature = as.numeric (Temperature))
+
+Calb.mean<-summarySE(Cal.dat,measurevar ="Temperature",
+                      groupvars = c("Time"),
+                      na.rm = T)
+
+```
+```{R}
+
+lm_fit <- lm(Temperature ~ Time, data = Cal.dat)
+
+# Extract coefficients
+coefficients <- coef(lm_fit)
+intercept <- coefficients[1]
+slope <- coefficients[2]
+
+# Calculate R^2
+r_squared <- summary(lm_fit)$r.squared
+
+# Create the formula text
+formula_text <- paste("y =", round(intercept, 2), "+", round(slope, 2), "x")
+r2_text <- paste("R² =", round(r_squared, 3))
+
+# Create the plot
+TimePlot2 <- ggplot(data = Cal.dat, aes(x = Time, y = Temperature)) +
+  geom_point(size = 4, alpha = 0.5) +
+  scale_y_continuous(expand = c(0, 0), limits = c(6, 11))+
+  ggtitle("Temperature vs Time Growth Chamber Door is Open") +
+  labs(x = "Time (Minutes)", y = "Temperature (C)") +
+  theme_bw() +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +  # Add the regression line
+  annotate("text", x = max(Cal.dat$Time) * 0.8, y = 7, 
+           label = formula_text, color = "black", size = 5, hjust = 0) +  # Add the formula
+  annotate("text", x = max(Cal.dat$Time) * 0.8, y = 6.5, 
+           label = r2_text, color = "black", size = 5, hjust = 0)  # Add R²
+
+print(TimePlot2)
+
+ggsave("GCDoorOpen.pdf", TimePlot2,
+       width=12, height=8, units="in", dpi=600)
+
+```

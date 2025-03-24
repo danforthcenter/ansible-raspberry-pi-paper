@@ -1,0 +1,205 @@
+---
+title: "HOBO Normalization"
+author: "JG Ballenger"
+date: "2023-07-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(readxl)
+library(gt) #grammar for tables
+library(Rmisc)
+library(drc)
+library(emmeans)
+library(cowplot)
+library(lmerTest)
+library(multcomp)
+library(multcompView)
+library(lme4)
+library(ggpubr)
+library(tidyverse)
+library(rstatix)
+library(lubridate)
+library(nlme)
+```
+
+```{R}
+
+#The purpose of this chunk of code is to compare the HOBO readings of a HOBO model UX100-003, serial number 20179956, to probe readings taken at the same time. The comparison is a paired T-test between the HOBO and respective TEMPer2 probes. This will ideally show that they produce slightly different readings and provide justification for using a correction factor.
+
+HNZ.dat <- read.csv("HOBO_Norm_All_Data-July2023.csv") %>%
+  mutate(datetime = as.factor(datetime),
+         ip=as.factor(ip),
+         position=as.factor(position),
+         temperature.usb=as.numeric(temperature.usb),
+         temperature.probe=as.numeric(temperature.probe),
+         HOBO=as.numeric(HOBO),
+         Adjusted=as.numeric(Adjusted))
+
+HNZ.dat_long <- HNZ.dat %>%
+  pivot_longer(cols = c(temperature.probe, HOBO), 
+               names_to = "Source", 
+               values_to = "Temperature")
+
+HNZPlot<-HNZ.dat %>%
+  ggplot() +
+  geom_boxplot(aes(x = "Probe", y = temperature.probe), fill="grey") +
+  geom_boxplot(aes(x="HOBO", y= HOBO), fill="yellow") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  facet_wrap(~factor(position, levels=c('159-003-001','159-003-002','159-003-003','159-003-004',
+          '159-002-001','159-002-002','159-002-003','159-002-004',
+          '159-001-001','159-001-002','159-001-003','159-001-004')))+
+  xlab("Probe vs Adjusted") +
+  ylab("Temperature °C") +
+  ggtitle("Growth Chamber Temperature")+
+  geom_hline(yintercept = 6, color="blue")+
+  theme(legend.position = "right")+
+  theme_bw()
+  
+
+HNZPlot
+
+ggsave("HOBONormAdj2.png", HNZPlot,
+       width=12, height=8, units="in", dpi=600)
+
+
+HNZ.dat_long <- HNZ.dat %>%
+  pivot_longer(cols = c(temperature.probe, HOBO), 
+               names_to = "Source", 
+               values_to = "Temperature")
+
+HNZPlot <- HNZ.dat_long %>%
+  ggplot(aes(x = Source, y = Temperature)) +
+  geom_boxplot(aes(fill = Source)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  facet_wrap(~ factor(position, levels = c('159-003-001', '159-003-002', '159-003-003', '159-003-004',
+                                            '159-002-001', '159-002-002', '159-002-003', '159-002-004',
+                                            '159-001-001', '159-001-002', '159-001-003', '159-001-004'))) +
+  xlab("Probe vs HOBO") +
+  ylab("Temperature °C") +
+  ggtitle("Growth Chamber Temperature Readings") +
+  geom_hline(yintercept = 6, color = "blue") +
+  theme_bw() +
+  ggpubr::stat_compare_means(method = "t.test", comparisons = list(c("temperature.probe", "HOBO")))+
+  coord_cartesian(ylim = c(4, 10))+
+  scale_fill_manual(values = c("temperature.probe" = "grey", "HOBO" = "yellow"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))+
+  scale_x_discrete(labels = c("temperature.probe" = "TEMPer 2 Probe", "HOBO" = "HOBO Device"))+
+  theme(legend.position = "none")
+ 
+
+print(HNZPlot)
+
+ggsave("Probe vs HOBO2.pdf", HNZPlot,
+       width=12, height=8, units="in", dpi=600)
+
+```
+
+```{r}
+
+#The purpose of this snippet is to create a heatmap of the growth chamber in question using adjusted values from the probes.
+
+HNZ.mean<-summarySE(HNZ.dat,measurevar = "Adjusted",
+                      groupvars = c("position"), na.rm = T)
+
+HNZ.analysis <- lm(Adjusted ~ position, data = HNZ.dat)
+anova(HNZ.analysis)
+multcomp::cld(emmeans(HNZ.analysis, ~position))
+
+plot(HNZ.analysis)
+
+
+
+HNZHM1<-ggplot(HNZ.dat, aes(x="", y="Adjusted", fill=Adjusted))+geom_tile()+
+  facet_wrap(~factor(position, levels=c('159-003-001','159-003-002','159-003-003','159-003-004',
+          '159-002-001','159-002-002','159-002-003','159-002-004',
+          '159-001-001','159-001-002','159-001-003','159-001-004')))+
+  scale_fill_gradient(low = "blue", high = "red")
+
+HNZHM1
+
+ggsave("HOBOHeatMap.png", HNZHM1,
+       width=12, height=8, units="in", dpi=600)
+
+
+```
+
+```{r}
+
+#The purpose of this code snippet is to compare between different areas of the growth chamber using the adjusted value to demonstrate the existence of microclimates within the chamber.
+
+library(lme4)
+library(multcompView)
+library(emmeans)
+library(car)
+
+
+adjtst <- lmer(Adjusted ~ position + (1 | Correction.Factor), HNZ.dat)
+test <- multcomp::glht(adjtst, linfct = multcomp::mcp(position = "Tukey"))
+hnzcld<-multcomp::cld(test)
+print(hnzcld)
+summary(hnzcld)
+
+letters <- hnzcld$mcletters$Letters
+positions <- names(hnzcld$mcletters$Letters)
+
+hnzcld_df <- data.frame(
+  position = positions,
+  letters = letters,
+  stringsAsFactors = FALSE
+)
+
+# Ensure the position is a factor with the correct levels
+hnzcld_df <- hnzcld_df %>% 
+  mutate(position = factor(position, levels = c('159-003-001', '159-003-002', '159-003-003', '159-003-004',
+                                               '159-002-001', '159-002-002', '159-002-003', '159-002-004',
+                                               '159-001-001', '159-001-002', '159-001-003', '159-001-004')))
+
+HNZPlot2 <- HNZ.dat %>%
+  ggplot() +
+  geom_boxplot(aes(x = 1, y = Adjusted, group = position)) +  # Use a constant x value and group by position
+  theme(axis.text.x = element_blank(),  # Remove x-axis text
+        axis.ticks.x = element_blank(),  # Remove x-axis ticks
+        panel.grid.major.x = element_blank(),  # Remove grid lines for x-axis
+        panel.grid.minor.x = element_blank()) + 
+  xlab("") +  # Remove x-axis label
+  ylab("Temperature °C") +
+  ggtitle("Growth Chamber Temperature") +
+  geom_hline(yintercept = 6, color = "blue") +
+  ylim(4, 10) +
+  geom_text(data = hnzcld_df, 
+            aes(x = 1, y = max(HNZ.dat$Adjusted)+.5, label = letters),  # Adjust y dynamically
+            position = position_nudge(y = 0.2),  # Slight vertical nudge
+            size = 3, hjust = 0.5, vjust = 0, 
+            inherit.aes = FALSE)+
+  facet_wrap(~position)
+
+print(HNZPlot2)
+
+ggsave("Probe vs HOBO.pdf", HNZPlot2,
+       width=12, height=8, units="in", dpi=600)
+
+```
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
