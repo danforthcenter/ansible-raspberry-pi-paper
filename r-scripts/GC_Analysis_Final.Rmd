@@ -72,3 +72,46 @@ ggsave("GCDoorOpen.pdf", TimePlot2,
        width=12, height=8, units="in", dpi=600)
 
 ```
+```{r}
+
+chamberrecoverydata<-read.csv("2025-05-door-experiment.csv")
+temps.dat<-chamberrecoverydata
+
+temps.dat<-temps.dat%>%
+  filter(temperature.probe !="devices")%>%
+  filter(temperature.usb !="Error:")%>%
+  filter(temperature.probe!="-")%>%
+  filter(temperature.usb!="-")%>%
+  filter(temperature.probe !="Error:")%>%
+  filter(temperature.usb !="devices")
+
+temps.dat.hour<-unlist(lapply(str_split(temps.dat$datetime,"-"), FUN = function(l){return(l[4])}))
+temps.dat$lights<-temps.dat.hour
+
+temps.dat$datetime<-as.POSIXct(temps.dat$datetime, format = "%Y-%m-%d-%H-%M")
+
+temps.dat$temperature.probe1<-substr(temps.dat$temperature.probe, 1, nchar(temps.dat$temperature.probe)-1)
+temps.dat$temperature.probe1<-as.numeric(temps.dat$temperature.probe1)
+
+colors <- c("157.001.001" = "black", "157.001.002"="yellow","157.001.003"="grey","157.001.004" = "blue",
+            "157.002.001" = "orange", "157.002.002" = "green", "157.002.003"="purple", "157.002.004"= "pink",
+            "157.003.001" = "red", "157.003.002" = "brown", "157.003.003"="cyan", "157.003.004" = "magenta")
+
+
+temps.dat$datetime1<-as.POSIXct(temps.dat$datetime, format = "%Y-%m-%d %H:%M:%S")
+planting_date <- as.POSIXct("2025-05-21 10:17:00", format="%Y-%m-%d %H:%M:%S")
+temps.dat$min_after_start <- as.numeric(difftime(temps.dat$datetime1, planting_date, units = "mins"))
+
+TimePlot2 <- ggplot(data = temps.dat, aes(x = temps.dat$min_after_start, y = temps.dat$temperature.probe1)) +
+  geom_point(size = 4, alpha = 0.5, color = temps.dat$color) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 15))+
+  ggtitle("Temperature Recovery Time") +
+  labs(x = "Time (Minutes)", y = "Temperature (C)") +
+  theme_bw() 
+
+plot(TimePlot2)
+
+ggsave("GCDoorOpen-recovery.pdf", TimePlot2,
+       width=12, height=8, units="in", dpi=600)
+
+```
